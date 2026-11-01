@@ -110,14 +110,17 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         saveKeyButton.text = "Key save karo"
         saveKeyButton.setOnClickListener {
             val k = keyBox.text.toString().trim()
+            keyBox.setText("")
             if (k.isEmpty()) {
                 statusView.text = "Pehle key paste karo, sir."
+            } else if (!isKeyValid(k)) {
+                statusView.text = "Ye asli key nahi lag rahi, isme space ya nayi line hai. " +
+                    "Sirf 'Your API key' card ka Copy key button dabake paste karo."
             } else {
                 getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .edit().putString(KEY_API, k).apply()
-                keyBox.setText("")
                 updateKeyHint()
-                statusView.text = "Key save ho gayi, sir."
+                statusView.text = "Key save ho gayi, sir. Aakhri 4 akshar: " + k.takeLast(4)
             }
         }
 
@@ -139,11 +142,20 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             .getString(KEY_API, "") ?: ""
     }
 
+    private fun isKeyValid(k: String): Boolean {
+        if (k.length < 20 || k.length > 100) return false
+        for (c in k) {
+            if (c.isWhitespace()) return false
+        }
+        return true
+    }
+
     private fun updateKeyHint() {
-        keyBox.hint = if (getApiKey().isEmpty()) {
-            "Gemini API key yahan paste karo"
-        } else {
-            "Key save hai. Badalni ho to nayi key paste karo"
+        val k = getApiKey()
+        keyBox.hint = when {
+            k.isEmpty() -> "Gemini API key yahan paste karo"
+            !isKeyValid(k) -> "Saved key galat hai. Sahi key paste karke save karo"
+            else -> "Key save hai (..." + k.takeLast(4) + "). Badalni ho to nayi paste karo"
         }
     }
 
@@ -331,6 +343,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val key = getApiKey()
         if (key.isEmpty()) {
             statusView.text = "Pehle neeche Gemini API key save karo, sir."
+            return
+        }
+        if (!isKeyValid(key)) {
+            statusView.text = "Saved key galat hai (isme space ya nayi line hai). " +
+                "Sahi key dobara paste karke save karo, sir."
             return
         }
         requestId++
