@@ -28,7 +28,11 @@ import java.util.Locale
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     companion object {
-        private const val GEMINI_MODEL = "gemini-2.5-flash-lite"
+        private val MODELS = listOf(
+            "gemini-flash-latest",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        )
         private const val PREFS = "jarvis_prefs"
         private const val KEY_API = "gemini_api_key"
         private val SYSTEM_PROMPT =
@@ -392,6 +396,51 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             .put("parts", JSONArray().put(JSONObject().put("text", text)))
     }
 
+    private fun postToGemini(model: String, key: String, bodyText: String): Pair<Int, String> {
+        val url = URL(
+            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        )
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 30000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("x-goog-api-key", key)
+            conn.outputStream.use { it.write(bodyText.toByteArray(Charsets.UTF_8)) }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            return Pair(code, text)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun parseReply(text: String): String {
+        val json = JSONObject(text)
+        val candidates = json.optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) {
+            throw Exception("Gemini ne koi jawab nahi diya.")
+        }
+        val parts = candidates.getJSONObject(0)
+            .optJSONObject("content")
+            ?.optJSONArray("parts")
+        val sb = StringBuilder()
+        if (parts != null) {
+            for (i in 0 until parts.length()) {
+                sb.append(parts.getJSONObject(i).optString("text", ""))
+            }
+        }
+        val result = sb.toString().trim()
+        if (result.isEmpty()) {
+            throw Exception("Gemini ka jawab khaali aaya.")
+        }
+        return result
+    }
+
     private fun callGemini(
         key: String,
         hist: List<Pair<String, String>>,
@@ -412,55 +461,27 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             )
         )
         body.put("contents", contents)
+        val bodyText = body.toString()
 
-        val url = URL(
-            "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent"
-        )
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 15000
-            conn.readTimeout = 30000
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("x-goog-api-key", key)
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-
-            if (code !in 200..299) {
-                var msg = text
-                try {
-                    msg = JSONObject(text).getJSONObject("error").getString("message")
-                } catch (e: Exception) {
-                }
-                throw Exception("Gemini error $code: ${msg.take(200)}")
+        var lastError = "Koi model nahi mila."
+        for (model in MODELS) {
+            val resp = postToGemini(model, key, bodyText)
+            val code = resp.first
+            val text = resp.second
+            if (code in 200..299) {
+                return parseReply(text)
             }
-
-            val json = JSONObject(text)
-            val candidates = json.optJSONArray("candidates")
-            if (candidates == null || candidates.length() == 0) {
-                throw Exception("Gemini ne koi jawab nahi diya.")
+            var msg = text
+            try {
+                msg = JSONObject(text).getJSONObject("error").getString("message")
+            } catch (e: Exception) {
             }
-            val parts = candidates.getJSONObject(0)
-                .optJSONObject("content")
-                ?.optJSONArray("parts")
-            val sb = StringBuilder()
-            if (parts != null) {
-                for (i in 0 until parts.length()) {
-                    sb.append(parts.getJSONObject(i).optString("text", ""))
-                }
+            lastError = "Gemini error $code ($model): ${msg.take(150)}"
+            if (code != 404) {
+                throw Exception(lastError)
             }
-            val result = sb.toString().trim()
-            if (result.isEmpty()) {
-                throw Exception("Gemini ka jawab khaali aaya.")
-            }
-            return result
-        } finally {
-            conn.disconnect()
         }
+        throw Exception(lastError)
     }
 
     override fun onStop() {
